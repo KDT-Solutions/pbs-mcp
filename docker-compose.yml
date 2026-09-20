@@ -11,6 +11,8 @@ services:
       - PBS_TOKEN_SECRET=${PBS_TOKEN_SECRET}
       - PBS_VERIFY_SSL=${PBS_VERIFY_SSL:-true}
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - MCP_READONLY=${MCP_READONLY:-false}
+      - MCP_ALLOW_DELETE=${MCP_ALLOW_DELETE:-false}
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000

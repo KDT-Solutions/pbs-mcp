@@ -1,12 +1,17 @@
 """
-PBS MCP Server (read-only) fuer den Proxmox Backup Server.
+PBS MCP Server fuer den Proxmox Backup Server (lesend, plus Verify/GC starten und Snapshots loeschen).
 Aufbau wie zammad-mcp/bexio-mcp: roher mcp.server.Server, Tool-Funktionen in TOOL_FUNCS,
 Transport ueber MCP_TRANSPORT:
 - "stdio" (Standard) - lokal via uvx/Claude Desktop
 - "http" - Streamable HTTP fuer Docker/Cloud hinter Reverse-Proxy, erfordert MCP_AUTH_TOKEN
 
 Alle Werte kommen aus Umgebungsvariablen (PBS_URL, PBS_TOKEN_ID, PBS_TOKEN_SECRET,
-PBS_VERIFY_SSL, MCP_AUTH_TOKEN, MCP_HOST, MCP_PORT) - keine Secrets im Code.
+PBS_VERIFY_SSL, MCP_AUTH_TOKEN, MCP_HOST, MCP_PORT, MCP_READONLY, MCP_ALLOW_DELETE) - keine Secrets im Code.
+
+Schutz fuer schreibende Tools:
+- MCP_READONLY=true sperrt alle schreibenden Tools.
+- Snapshots loeschen (snapshot_forget) ist zusaetzlich nur mit MCP_ALLOW_DELETE=true moeglich
+  und braucht pro Aufruf confirm=true (ohne confirm nur Vorschau).
 """
 
 import asyncio
@@ -50,6 +55,40 @@ def api_get(path: str, params: dict = None) -> Any:
     return response.json()["data"]
 
 
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "false").strip().lower() in ("1", "true", "yes")
+
+
+def _require_write() -> None:
+    if _flag("MCP_READONLY"):
+        raise RuntimeError("MCP_READONLY ist gesetzt - schreibende Aktionen sind gesperrt")
+
+
+def api_write(method: str, path: str, params: dict = None) -> Any:
+    """POST/DELETE gegen die PBS-API (Token-Auth, keine CSRF noetig)."""
+    _require_write()
+    if not (PBS_URL and PBS_TOKEN_ID and PBS_TOKEN_SECRET):
+        raise RuntimeError("PBS_URL, PBS_TOKEN_ID und PBS_TOKEN_SECRET muessen gesetzt sein (Umgebungsvariablen)")
+    clean = {k: v for k, v in (params or {}).items() if v is not None}
+    response = httpx.request(
+        method,
+        f"{PBS_URL}/api2/json{path}",
+        headers={"Authorization": f"PBSAPIToken={PBS_TOKEN_ID}:{PBS_TOKEN_SECRET}"},
+        **({"params": clean} if method == "DELETE" else {"data": clean}),
+        verify=_verify(),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json().get("data")
+
+
+def _to_epoch(value) -> int:
+    """Epoch-Sekunden oder ISO-Zeit (z.B. 2026-09-04T19:17:21Z) -> Epoch."""
+    if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+        return int(value)
+    return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+
+
 def _ts(value) -> str | None:
     if value is None:
         return None
@@ -82,8 +121,17 @@ def server_version() -> dict:
 
 
 def datastore_list() -> list[dict]:
-    """Alle Datastores mit Belegung, GC-Status und geschaetztem Voll-Datum."""
-    return api_get("/status/datastore-usage")
+    """Alle Datastores mit Belegung, GC-Status und geschaetztem Voll-Datum (ohne Belegungshistorie)."""
+    out = []
+    now = datetime.now(timezone.utc).timestamp()
+    for d in api_get("/status/datastore-usage"):
+        d = dict(d)
+        for k in ("history", "history-start", "history-delta"):
+            d.pop(k, None)
+        full = d.pop("estimated-full-date", None)
+        d["geschaetzt_voll"] = _ts(full) if full and full > now else None
+        out.append(d)
+    return out
 
 
 def namespace_list(store: str) -> list[dict]:
@@ -207,11 +255,111 @@ def task_log(upid: str, start: int = 0, limit: int = 200) -> str:
     return "\n".join(str(line.get("t", "")) for line in data)
 
 
+# ---------------------------------------------------------------- Diagnose (lesend)
+
+def disk_list() -> list[dict]:
+    """Physische Disks des PBS mit Groesse, Typ, Verwendung und SMART-Status (Sys.Audit noetig)."""
+    return api_get("/nodes/localhost/disks/list")
+
+
+def disk_smart(disk: str) -> dict:
+    """SMART-Werte einer Disk (Name wie in disk_list, z.B. sda)."""
+    return api_get("/nodes/localhost/disks/smart", {"disk": disk})
+
+
+def zfs_list() -> list[dict]:
+    """ZFS-Pools des PBS mit Groesse, Belegung und Health."""
+    return api_get("/nodes/localhost/disks/zfs")
+
+
+def zfs_status(name: str) -> dict:
+    """Detailstatus eines ZFS-Pools (Zustand, Fehler, Scrub) - entspricht zpool status."""
+    return api_get(f"/nodes/localhost/disks/zfs/{_q(name)}")
+
+
+def journal(lastentries: int = 100, since_hours: int = None) -> str:
+    """System-Journal des PBS (neueste Eintraege), z.B. fuer Storage- oder I/O-Fehler."""
+    since = None
+    if since_hours is not None:
+        since = int(datetime.now(timezone.utc).timestamp()) - since_hours * 3600
+    data = api_get("/nodes/localhost/journal", {"lastentries": lastentries, "since": since})
+    return "\n".join(str(line) for line in data)
+
+
+# ---------------------------------------------------------------- Aktionen (schreibend)
+
+def verify_start(
+    store: str,
+    ns: str = None,
+    backup_type: str = None,
+    backup_id: str = None,
+    backup_time: str = None,
+    ignore_verified: bool = False,
+) -> dict:
+    """Verify starten (Datastore.Verify). Ohne Filter ganzer Store, mit ns/backup_type/backup_id/backup_time eingegrenzt.
+    ignore_verified=true ueberspringt bereits erfolgreich verifizierte Snapshots. Gibt die UPID des Tasks zurueck."""
+    upid = api_write(
+        "POST",
+        f"/admin/datastore/{_q(store)}/verify",
+        {
+            "ns": ns,
+            "backup-type": backup_type,
+            "backup-id": backup_id,
+            "backup-time": _to_epoch(backup_time) if backup_time else None,
+            "ignore-verified": 1 if ignore_verified else 0,
+        },
+    )
+    return {"gestartet": True, "upid": upid}
+
+
+def verify_job_run(job_id: str) -> dict:
+    """Einen konfigurierten Verify-Job (ID aus verify_job_list) sofort starten. Gibt die UPID zurueck."""
+    upid = api_write("POST", f"/admin/verify/{_q(job_id)}/run")
+    return {"gestartet": True, "upid": upid}
+
+
+def gc_start(store: str) -> dict:
+    """Garbage Collection eines Datastores starten (Datastore.Modify). Gibt die UPID zurueck."""
+    upid = api_write("POST", f"/admin/datastore/{_q(store)}/gc")
+    return {"gestartet": True, "upid": upid}
+
+
+def snapshot_forget(
+    store: str,
+    backup_type: str,
+    backup_id: str,
+    backup_time: str,
+    ns: str = None,
+    confirm: bool = False,
+) -> dict:
+    """Einen Snapshot UNWIDERRUFLICH loeschen. Braucht MCP_ALLOW_DELETE=true. Ohne confirm=true nur Vorschau.
+    confirm=true darf nur gesetzt werden, nachdem der Benutzer das Loeschen genau dieses Snapshots ausdruecklich bestaetigt hat."""
+    _require_write()
+    if not _flag("MCP_ALLOW_DELETE"):
+        raise RuntimeError("Loeschen ist gesperrt: MCP_ALLOW_DELETE=true muss am Server gesetzt sein")
+    epoch = _to_epoch(backup_time)
+    ident = {"store": store, "ns": ns or "", "snapshot": f"{backup_type}/{backup_id}/{_ts(epoch)}"}
+    known = api_get(f"/admin/datastore/{_q(store)}/snapshots", {"ns": ns, "backup-type": backup_type, "backup-id": backup_id})
+    match = next((x for x in known if x.get("backup-time") == epoch), None)
+    if not match:
+        raise RuntimeError(f"Snapshot nicht gefunden: {ident['snapshot']}")
+    if not confirm:
+        return {"vorschau": True, "wuerde_loeschen": ident, "hinweis": "Zum Loeschen mit confirm=true erneut aufrufen (nur nach ausdruecklicher Bestaetigung)"}
+    api_write(
+        "DELETE",
+        f"/admin/datastore/{_q(store)}/snapshots",
+        {"ns": ns, "backup-type": backup_type, "backup-id": backup_id, "backup-time": epoch},
+    )
+    return {"geloescht": True, **ident}
+
+
 TOOL_FUNCS = {
     f.__name__: f
     for f in (
         server_version, datastore_list, namespace_list, group_list, snapshot_list,
         verify_failed_list, verify_job_list, task_list, task_status, task_log,
+        disk_list, disk_smart, zfs_list, zfs_status, journal,
+        verify_start, verify_job_run, gc_start, snapshot_forget,
     )
 }
 
@@ -230,7 +378,7 @@ async def list_tools():
         Tool(name="server_version", description="PBS-Version und Release abrufen (Verbindungstest).",
              inputSchema={"type": "object", "properties": {}}),
         Tool(name="datastore_list",
-             description="Alle Datastores mit Belegung (total/used/avail), GC-Status und geschaetztem Voll-Datum.",
+             description="Alle Datastores mit Belegung (total/used/avail), GC-Status und geschaetztem Voll-Datum (ohne Belegungshistorie).",
              inputSchema={"type": "object", "properties": {}}),
         Tool(name="namespace_list", description="Namespaces eines Datastores auflisten.",
              inputSchema={"type": "object", "properties": {"store": _STORE}, "required": ["store"]}),
@@ -268,6 +416,39 @@ async def list_tools():
                  "start": {"type": "integer", "default": 0},
                  "limit": {"type": "integer", "default": 200},
              }, "required": ["upid"]}),
+        Tool(name="disk_list", description="Physische Disks des PBS mit Groesse, Typ, Verwendung und SMART-Status (braucht Sys.Audit).",
+             inputSchema={"type": "object", "properties": {}}),
+        Tool(name="disk_smart", description="SMART-Werte einer Disk (Name wie in disk_list, z.B. sda).",
+             inputSchema={"type": "object", "properties": {"disk": {"type": "string"}}, "required": ["disk"]}),
+        Tool(name="zfs_list", description="ZFS-Pools des PBS mit Groesse, Belegung und Health.",
+             inputSchema={"type": "object", "properties": {}}),
+        Tool(name="zfs_status", description="Detailstatus eines ZFS-Pools (Zustand, Fehler, Scrub), entspricht zpool status.",
+             inputSchema={"type": "object", "properties": {"name": {"type": "string", "description": "Pool-Name aus zfs_list"}}, "required": ["name"]}),
+        Tool(name="journal", description="System-Journal des PBS (neueste Eintraege), z.B. fuer Storage- oder I/O-Fehler.",
+             inputSchema={"type": "object", "properties": {
+                 "lastentries": {"type": "integer", "default": 100},
+                 "since_hours": {"type": "integer", "description": "Nur Eintraege der letzten N Stunden"},
+             }}),
+        Tool(name="verify_start",
+             description="SCHREIBEND: Verify starten. Ohne Filter ganzer Datastore, sonst eingegrenzt per ns/backup_type/backup_id/backup_time (ISO-Zeit wie 2026-01-31T19:00:00Z oder Epoch). Gibt die UPID zurueck; Ergebnis mit task_status/task_log pruefen.",
+             inputSchema={"type": "object", "properties": {
+                 "store": _STORE, "ns": _NS,
+                 "backup_type": {"type": "string"}, "backup_id": {"type": "string"},
+                 "backup_time": {"type": "string"},
+                 "ignore_verified": {"type": "boolean", "default": False},
+             }, "required": ["store"]}),
+        Tool(name="verify_job_run", description="SCHREIBEND: Einen konfigurierten Verify-Job (ID aus verify_job_list) sofort starten.",
+             inputSchema={"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"]}),
+        Tool(name="gc_start", description="SCHREIBEND: Garbage Collection eines Datastores starten.",
+             inputSchema={"type": "object", "properties": {"store": _STORE}, "required": ["store"]}),
+        Tool(name="snapshot_forget",
+             description="SCHREIBEND, UNWIDERRUFLICH: Einen Snapshot loeschen. Nur nutzbar mit MCP_ALLOW_DELETE=true am Server. Ohne confirm=true nur Vorschau; confirm=true nur setzen, nachdem der Benutzer das Loeschen genau dieses Snapshots ausdruecklich bestaetigt hat.",
+             inputSchema={"type": "object", "properties": {
+                 "store": _STORE, "ns": _NS,
+                 "backup_type": {"type": "string"}, "backup_id": {"type": "string"},
+                 "backup_time": {"type": "string", "description": "ISO-Zeit wie 2026-01-31T19:00:00Z oder Epoch"},
+                 "confirm": {"type": "boolean", "default": False},
+             }, "required": ["store", "backup_type", "backup_id", "backup_time"]}),
     ]
 
 
