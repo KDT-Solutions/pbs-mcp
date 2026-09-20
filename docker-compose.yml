@@ -1,0 +1,19 @@
+services:
+  pbs-mcp:
+    # Fertiges Image aus der GitHub Container Registry (per GitHub Actions bei jedem
+    # Push auf main gebaut), damit "Pull and redeploy" in Portainer zuverlaessig geht.
+    image: ghcr.io/kdt-solutions/pbs-mcp:latest
+    container_name: pbs-mcp-cloud
+    restart: unless-stopped
+    environment:
+      - PBS_URL=${PBS_URL}
+      - PBS_TOKEN_ID=${PBS_TOKEN_ID}
+      - PBS_TOKEN_SECRET=${PBS_TOKEN_SECRET}
+      - PBS_VERIFY_SSL=${PBS_VERIFY_SSL:-true}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+    ports:
+      # Standardmaessig nur localhost - oeffentlicher Zugriff ueber Reverse-Proxy (Plesk/nginx) mit TLS.
+      - "${MCP_BIND_ADDR:-127.0.0.1}:${MCP_HOST_PORT:-8423}:8000"
