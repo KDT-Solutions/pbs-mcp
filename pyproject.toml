@@ -1,6 +1,6 @@
 [project]
 name = "pbs-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "MCP-Server fuer Proxmox Backup Server: Datastores, Snapshots, Verify-Status, Tasks, Disk-/ZFS-Diagnose, Verify/GC starten"
 requires-python = ">=3.12"
 dependencies = [

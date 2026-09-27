@@ -10,6 +10,7 @@ Lesend:
 
 | Tool | Beschreibung |
 |------|--------------|
+| `get_version` | Version des laufenden MCP-Servers (Redeploy-Kontrolle) |
 | `server_version` | Verbindungstest, PBS-Version |
 | `datastore_list` | Datastores mit Belegung, GC-Status (ohne Belegungshistorie) |
 | `namespace_list` | Namespaces eines Datastores |
