@@ -26,6 +26,25 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
+
+def _read_version() -> str:
+    """Version aus pyproject.toml neben dem Paket (Docker/Checkout), sonst aus den installierten Paket-Metadaten."""
+    pyproject = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pyproject.toml")
+    try:
+        import tomllib
+        with open(pyproject, "rb") as f:
+            return tomllib.load(f)["project"]["version"]
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version
+        return version("pbs-mcp")
+    except Exception:
+        return "unbekannt"
+
+
+__version__ = _read_version()
+
 PBS_URL = os.environ.get("PBS_URL", "").rstrip("/")
 PBS_TOKEN_ID = os.environ.get("PBS_TOKEN_ID", "")
 PBS_TOKEN_SECRET = os.environ.get("PBS_TOKEN_SECRET", "")
@@ -114,6 +133,11 @@ def _snap(s: dict) -> dict:
 
 
 # ---------------------------------------------------------------- Tool-Funktionen
+
+def get_version() -> dict:
+    """Version des laufenden PBS-MCP-Servers."""
+    return {"name": "pbs-mcp", "version": __version__, "commit": os.environ.get("GIT_SHA", "unbekannt")}
+
 
 def server_version() -> dict:
     """PBS-Version und Release abrufen (Verbindungstest)."""
@@ -356,7 +380,7 @@ def snapshot_forget(
 TOOL_FUNCS = {
     f.__name__: f
     for f in (
-        server_version, datastore_list, namespace_list, group_list, snapshot_list,
+        get_version, server_version, datastore_list, namespace_list, group_list, snapshot_list,
         verify_failed_list, verify_job_list, task_list, task_status, task_log,
         disk_list, disk_smart, zfs_list, zfs_status, journal,
         verify_start, verify_job_run, gc_start, snapshot_forget,
@@ -365,7 +389,7 @@ TOOL_FUNCS = {
 
 # ---------------------------------------------------------------- MCP-Server
 
-server = Server("pbs-mcp")
+server = Server("pbs-mcp", version=__version__)
 
 _STORE = {"type": "string", "description": "Datastore-Name, z.B. mein-datastore"}
 _NS = {"type": "string", "description": "Namespace (optional), z.B. mein-namespace"}
@@ -375,6 +399,8 @@ _UPID = {"type": "string", "description": "UPID des Tasks"}
 @server.list_tools()
 async def list_tools():
     return [
+        Tool(name="get_version", description="Version des laufenden PBS-MCP-Servers abfragen (Redeploy-Kontrolle).",
+             inputSchema={"type": "object", "properties": {}}),
         Tool(name="server_version", description="PBS-Version und Release abrufen (Verbindungstest).",
              inputSchema={"type": "object", "properties": {}}),
         Tool(name="datastore_list",
