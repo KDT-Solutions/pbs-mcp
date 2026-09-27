@@ -136,7 +136,7 @@ def _snap(s: dict) -> dict:
 
 def get_version() -> dict:
     """Version des laufenden PBS-MCP-Servers."""
-    return {"name": "pbs-mcp", "version": __version__}
+    return {"name": "pbs-mcp", "version": __version__, "commit": os.environ.get("GIT_SHA", "unbekannt")}
 
 
 def server_version() -> dict:

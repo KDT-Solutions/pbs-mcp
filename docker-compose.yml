@@ -3,6 +3,9 @@ services:
     # Fertiges Image aus der GitHub Container Registry (per GitHub Actions bei jedem
     # Push auf main gebaut), damit "Pull and redeploy" in Portainer zuverlaessig geht.
     image: ghcr.io/kdt-solutions/pbs-mcp:latest
+    # Bei jedem Deploy/Redeploy das Image aus der Registry neu ziehen, statt
+    # eine lokal schon vorhandene (evtl. veraltete) :latest-Kopie zu verwenden.
+    pull_policy: always
     container_name: pbs-mcp-cloud
     restart: unless-stopped
     environment:
