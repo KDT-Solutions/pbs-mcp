@@ -1,5 +1,7 @@
 [project]
 name = "pbs-mcp"
+# Nur Major.Minor wird von Hand gepflegt, der Patch-Teil wird automatisch
+# aus der Git-Historie gezaehlt (siehe _read_version im Paket).
 version = "0.4.0"
 description = "MCP-Server fuer Proxmox Backup Server: Datastores, Snapshots, Verify-Status, Tasks, Disk-/ZFS-Diagnose, Verify/GC starten"
 requires-python = ">=3.12"
