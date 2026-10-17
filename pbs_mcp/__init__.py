@@ -1,9 +1,8 @@
 """
 PBS MCP Server fuer den Proxmox Backup Server (lesend, plus Verify/GC starten und Snapshots loeschen).
-Aufbau wie zammad-mcp/bexio-mcp: roher mcp.server.Server, Tool-Funktionen in TOOL_FUNCS,
-Transport ueber MCP_TRANSPORT:
-- "stdio" (Standard) - lokal via uvx/Claude Desktop
-- "http" - Streamable HTTP fuer Docker/Cloud hinter Reverse-Proxy, erfordert MCP_AUTH_TOKEN
+Aufbau wie zammad-mcp/bexio-mcp: roher mcp.server.Server, Tool-Funktionen in TOOL_FUNCS.
+Laeuft ausschliesslich als Docker-Container mit Streamable-HTTP-Transport hinter einem
+Reverse-Proxy und erfordert MCP_AUTH_TOKEN. Ein lokaler Betrieb (stdio/uvx) ist nicht vorgesehen.
 
 Alle Werte kommen aus Umgebungsvariablen (PBS_URL, PBS_TOKEN_ID, PBS_TOKEN_SECRET,
 PBS_VERIFY_SSL, MCP_AUTH_TOKEN, MCP_HOST, MCP_PORT, MCP_READONLY, MCP_ALLOW_DELETE) - keine Secrets im Code.
@@ -23,7 +22,6 @@ from urllib.parse import quote
 
 import httpx
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 
@@ -589,19 +587,11 @@ async def run_http_server():
 
 
 def main():
-    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
-    if transport in ("http", "streamable-http"):
-        if not MCP_AUTH_TOKEN:
-            raise RuntimeError(
-                "MCP_TRANSPORT=http erfordert MCP_AUTH_TOKEN (statisches Bearer-Token) - "
-                "aus Sicherheitsgruenden kein Start ohne Token."
-            )
-        asyncio.run(run_http_server())
-    else:
-        async def _run_stdio():
-            async with stdio_server() as (read_stream, write_stream):
-                await server.run(read_stream, write_stream, server.create_initialization_options())
-        asyncio.run(_run_stdio())
+    if not MCP_AUTH_TOKEN:
+        raise RuntimeError(
+            "MCP_AUTH_TOKEN (statisches Bearer-Token) fehlt - aus Sicherheitsgruenden kein Start ohne Token."
+        )
+    asyncio.run(run_http_server())
 
 
 if __name__ == "__main__":
