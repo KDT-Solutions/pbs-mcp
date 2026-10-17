@@ -1,6 +1,6 @@
 # PBS MCP Server
 
-MCP-Server fuer den Proxmox Backup Server (PBS): Status und Diagnose lesend, dazu Verify/GC starten und (gesperrt, nur mit Freigabe) Snapshots loeschen. Gleicher Aufbau wie zammad-mcp: stdio lokal (uvx) oder HTTP/Docker in der Cloud hinter Reverse-Proxy, Schutz per statischem Bearer-Token (`MCP_AUTH_TOKEN`), Image per GitHub Actions nach ghcr.io.
+MCP-Server fuer den Proxmox Backup Server (PBS): Status und Diagnose lesend, dazu Verify/GC starten und (gesperrt, nur mit Freigabe) Snapshots loeschen. Gleicher Aufbau wie zammad-mcp: laeuft ausschliesslich als Docker-Container (Streamable HTTP) in der Cloud hinter Reverse-Proxy, ein lokaler Betrieb (stdio/uvx) ist nicht vorgesehen, Schutz per statischem Bearer-Token (`MCP_AUTH_TOKEN`), Image per GitHub Actions nach ghcr.io.
 
 Schreibende Aktionen sind gesichert: `MCP_READONLY=true` sperrt sie alle, Loeschen geht nur mit `MCP_ALLOW_DELETE=true` am Server und `confirm=true` pro Aufruf (ohne confirm nur Vorschau). Neue Backups erzeugt der PBS nicht selbst, das loest der Proxmox VE aus.
 
@@ -44,10 +44,9 @@ Schreibend:
 | `PBS_TOKEN_ID` | ja | - | z.B. `mcp@pbs!claude` |
 | `PBS_TOKEN_SECRET` | ja | - | Secret des API-Tokens |
 | `PBS_VERIFY_SSL` | nein | `true` | `true`, `false` oder Pfad zu einer CA-Datei (PBS hat oft ein selbstsigniertes Zertifikat) |
-| `MCP_TRANSPORT` | nein | `stdio` | `stdio` lokal / `http` Cloud-Modus |
 | `MCP_READONLY` | nein | `false` | `true` sperrt alle schreibenden Tools |
 | `MCP_ALLOW_DELETE` | nein | `false` | `true` erlaubt `snapshot_forget` (zusaetzlich `confirm=true` pro Aufruf) |
-| `MCP_AUTH_TOKEN` | ja, nur HTTP | - | Statisches Bearer-Token, ohne startet der HTTP-Modus nicht |
+| `MCP_AUTH_TOKEN` | ja | - | Statisches Bearer-Token, ohne startet der Server nicht |
 | `MCP_HOST` / `MCP_PORT` | nein | `0.0.0.0` / `8000` | Bind im Container |
 | `MCP_BIND_ADDR` / `MCP_HOST_PORT` | nein | `127.0.0.1` / `8423` | Port-Mapping auf dem Docker-Host |
 
@@ -70,27 +69,6 @@ Repo nach `kdt-solutions/pbs-mcp` pushen, dann baut GitHub Actions das Image (`.
 3. Deploy. Updates spaeter per "Pull and redeploy".
 
 Reverse-Proxy (Plesk/nginx) mit TLS auf `127.0.0.1:8423`, Endpoint-Pfad `/mcp`. In Claude als Remote-MCP mit `https://<subdomain>/mcp` und dem `MCP_AUTH_TOKEN` als Bearer-Token einbinden. Der Container muss `PBS_URL` (Port 8007) erreichen koennen.
-
-## 3. Lokal per uvx (stdio)
-
-```json
-{
-  "mcpServers": {
-    "pbs": {
-      "command": "uvx",
-      "args": ["--from", "C:/Pfad/zu/pbs-mcp", "--python", "3.12", "pbs-mcp"],
-      "env": {
-        "PBS_URL": "https://pbs.example.com:8007",
-        "PBS_TOKEN_ID": "mcp@pbs!claude",
-        "PBS_TOKEN_SECRET": "...",
-        "PBS_VERIFY_SSL": "false"
-      }
-    }
-  }
-}
-```
-
-Nach Code-Aenderungen: Version in `pyproject.toml` erhoehen und `uv cache clean` ausfuehren, bevor Claude Desktop neu gestartet wird.
 
 ## Getestet
 
