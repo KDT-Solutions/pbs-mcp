@@ -48,7 +48,7 @@ Schreibend:
 | `MCP_ALLOW_DELETE` | nein | `false` | `true` erlaubt `snapshot_forget` (zusaetzlich `confirm=true` pro Aufruf) |
 | `MCP_AUTH_TOKEN` | ja | - | Statisches Bearer-Token, ohne startet der Server nicht |
 | `MCP_HOST` / `MCP_PORT` | nein | `0.0.0.0` / `8000` | Bind im Container |
-| `MCP_BIND_ADDR` / `MCP_HOST_PORT` | nein | `127.0.0.1` / `8423` | Port-Mapping auf dem Docker-Host |
+| `MCP_BIND_ADDR` / `MCP_HOST_PORT` | nein | `0.0.0.0` / `8423` | Port-Mapping auf dem Docker-Host |
 
 ## 1. API-Token in PBS anlegen
 
@@ -68,7 +68,7 @@ Repo nach `kdt-solutions/pbs-mcp` pushen, dann baut GitHub Actions das Image (`.
 2. Environment variables setzen: `PBS_URL`, `PBS_TOKEN_ID`, `PBS_TOKEN_SECRET`, `PBS_VERIFY_SSL`, `MCP_AUTH_TOKEN`
 3. Deploy. Updates spaeter per "Pull and redeploy".
 
-Reverse-Proxy (Plesk/nginx) mit TLS auf `127.0.0.1:8423`, Endpoint-Pfad `/mcp`. In Claude als Remote-MCP mit `https://<subdomain>/mcp` und dem `MCP_AUTH_TOKEN` als Bearer-Token einbinden. Der Container muss `PBS_URL` (Port 8007) erreichen koennen.
+Reverse-Proxy (Plesk/nginx) mit TLS auf `<Host-IP>:8423`, Endpoint-Pfad `/mcp`. In Claude als Remote-MCP mit `https://<subdomain>/mcp` und dem `MCP_AUTH_TOKEN` als Bearer-Token einbinden. Der Container muss `PBS_URL` (Port 8007) erreichen koennen.
 
 ## Getestet
 

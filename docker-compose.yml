@@ -19,5 +19,7 @@ services:
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000
     ports:
-      # Standardmaessig nur localhost - oeffentlicher Zugriff ueber Reverse-Proxy (Plesk/nginx) mit TLS.
-      - "${MCP_BIND_ADDR:-127.0.0.1}:${MCP_HOST_PORT:-8423}:8000"
+      # Auf allen Interfaces gebunden (Standard wie bei allen MCP-Stacks), damit
+      # NPM den Dienst ueber <Host-IP>:8423 erreicht. Die Zugriffskontrolle ist das
+      # Bearer-Token, TLS macht der Reverse-Proxy. Ueber MCP_BIND_ADDR einschraenkbar.
+      - "${MCP_BIND_ADDR:-0.0.0.0}:${MCP_HOST_PORT:-8423}:8000"
