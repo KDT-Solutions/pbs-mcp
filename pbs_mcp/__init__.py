@@ -554,16 +554,29 @@ class BearerAuthMiddleware:
         await self.app(scope, receive, send)
 
 
-async def run_http_server():
+def with_healthz(app):
+    """GET /healthz fuer den Docker-Healthcheck, ohne Auth. Liefert nur {"status": "ok"} -
+    keine Version, keine Konfiguration. Prueft nur, ob der Prozess antwortet, nicht die
+    PBS-API (sonst wuerde ein Ausfall des PBS den Container unhealthy machen).
+    Alle anderen Pfade laufen unveraendert durch die Bearer-Pruefung."""
+    from starlette.responses import JSONResponse
+
+    async def router(scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == "/healthz" and scope["method"] in ("GET", "HEAD"):
+            await JSONResponse({"status": "ok"})(scope, receive, send)
+            return
+        await app(scope, receive, send)
+
+    return router
+
+
+def build_http_app(token: str):
+    """Starlette-App mit /mcp hinter der Bearer-Pruefung, /healthz davor, CORS aussen."""
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.middleware.cors import CORSMiddleware
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.server.transport_security import TransportSecuritySettings
-    import uvicorn
-
-    host = os.environ.get("MCP_HOST", "0.0.0.0")
-    port = int(os.environ.get("MCP_PORT", "8000"))
 
     session_manager = StreamableHTTPSessionManager(
         app=server,
@@ -574,13 +587,21 @@ async def run_http_server():
         routes=[Route("/mcp", endpoint=_StreamableHTTPASGIApp(session_manager))],
         lifespan=lambda app: session_manager.run(),
     )
-    cors_app = CORSMiddleware(
-        BearerAuthMiddleware(app, MCP_AUTH_TOKEN),
+    return CORSMiddleware(
+        with_healthz(BearerAuthMiddleware(app, token)),
         allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["mcp-session-id"],
     )
+
+
+async def run_http_server():
+    import uvicorn
+
+    host = os.environ.get("MCP_HOST", "0.0.0.0")
+    port = int(os.environ.get("MCP_PORT", "8000"))
+    cors_app = build_http_app(MCP_AUTH_TOKEN)
     srv = uvicorn.Server(uvicorn.Config(cors_app, host=host, port=port, log_level="info"))
     print(f"PBS MCP HTTP server running on {host}:{port}", flush=True)
     await srv.serve()

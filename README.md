@@ -68,7 +68,7 @@ Repo nach `kdt-solutions/pbs-mcp` pushen, dann baut GitHub Actions das Image (`.
 2. Environment variables setzen: `PBS_URL`, `PBS_TOKEN_ID`, `PBS_TOKEN_SECRET`, `PBS_VERIFY_SSL`, `MCP_AUTH_TOKEN`
 3. Deploy. Updates spaeter per "Pull and redeploy".
 
-Reverse-Proxy (Plesk/nginx) mit TLS auf `<Host-IP>:8423`, Endpoint-Pfad `/mcp`. In Claude als Remote-MCP mit `https://<subdomain>/mcp` und dem `MCP_AUTH_TOKEN` als Bearer-Token einbinden. Der Container muss `PBS_URL` (Port 8007) erreichen koennen.
+Reverse-Proxy (Plesk/nginx) mit TLS auf `<Host-IP>:8423`, Endpoint-Pfad `/mcp`. `GET /healthz` ist ohne Token erreichbar und liefert nur `{"status": "ok"}` (Docker-Healthcheck, keine Abfrage des PBS); alle anderen Pfade brauchen das Bearer-Token. In Claude als Remote-MCP mit `https://<subdomain>/mcp` und dem `MCP_AUTH_TOKEN` als Bearer-Token einbinden. Der Container muss `PBS_URL` (Port 8007) erreichen koennen.
 
 ## Getestet
 
