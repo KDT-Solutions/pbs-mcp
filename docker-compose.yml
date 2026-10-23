@@ -10,11 +10,9 @@ services:
     restart: unless-stopped
     # Haertung: unprivilegierter User (Dockerfile), Root-Dateisystem nur lesbar,
     # keine Linux-Capabilities, keine Rechteausweitung. Der Server schreibt nichts auf Platte.
+    # cap_drop/security_opt/no-new-privileges sind hier bewusst nicht gesetzt: Portainer lehnt
+    # security-opt und Capabilities fuer Nicht-Admin-Benutzer ab (Stack wird vom MCP-User deployt).
     read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
     tmpfs:
       - /tmp
     environment:
