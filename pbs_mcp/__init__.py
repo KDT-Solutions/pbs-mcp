@@ -9,12 +9,18 @@ PBS_VERIFY_SSL, MCP_AUTH_TOKEN, MCP_HOST, MCP_PORT, MCP_READONLY, MCP_ALLOW_DELE
 
 Schutz fuer schreibende Tools:
 - MCP_READONLY=true sperrt alle schreibenden Tools.
+- Verify/GC starten (verify_start, verify_job_run, gc_start) braucht pro Aufruf confirm=true,
+  ohne confirm kommt nur eine Vorschau (ganzer Datastore = lange, I/O-intensive Tasks).
 - Snapshots loeschen (snapshot_forget) ist zusaetzlich nur mit MCP_ALLOW_DELETE=true moeglich
   und braucht pro Aufruf confirm=true (ohne confirm nur Vorschau).
+
+Fehler der PBS-API gehen nur mit Statuscode und kurzer Meldung an den Client; URL und
+Rohantwort landen im Log (stderr).
 """
 
 import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -69,6 +75,8 @@ def _read_version() -> str:
 
 
 __version__ = _read_version()
+
+log = logging.getLogger("pbs_mcp")
 
 PBS_URL = os.environ.get("PBS_URL", "").rstrip("/")
 PBS_TOKEN_ID = os.environ.get("PBS_TOKEN_ID", "")
@@ -337,6 +345,11 @@ def journal(lastentries: int = 100, since_hours: int = None) -> str:
 
 # ---------------------------------------------------------------- Aktionen (schreibend)
 
+def _preview(aktion: str, umfang: dict) -> dict:
+    return {"vorschau": True, "wuerde_starten": aktion, "umfang": umfang,
+            "hinweis": "Zum Starten mit confirm=true erneut aufrufen (Task laeuft auf dem PBS, bei ganzem Datastore lange und I/O-intensiv)"}
+
+
 def verify_start(
     store: str,
     ns: str = None,
@@ -344,9 +357,20 @@ def verify_start(
     backup_id: str = None,
     backup_time: str = None,
     ignore_verified: bool = False,
+    confirm: bool = False,
 ) -> dict:
     """Verify starten (Datastore.Verify). Ohne Filter ganzer Store, mit ns/backup_type/backup_id/backup_time eingegrenzt.
-    ignore_verified=true ueberspringt bereits erfolgreich verifizierte Snapshots. Gibt die UPID des Tasks zurueck."""
+    ignore_verified=true ueberspringt bereits erfolgreich verifizierte Snapshots. Ohne confirm=true nur Vorschau.
+    Gibt die UPID des Tasks zurueck."""
+    _require_write()
+    umfang = {
+        "store": store, "ns": ns or "",
+        "filter": {k: v for k, v in (("backup_type", backup_type), ("backup_id", backup_id), ("backup_time", backup_time)) if v}
+        or "ganzer Datastore",
+        "ignore_verified": ignore_verified,
+    }
+    if not confirm:
+        return _preview("Verify", umfang)
     upid = api_write(
         "POST",
         f"/admin/datastore/{_q(store)}/verify",
@@ -361,14 +385,20 @@ def verify_start(
     return {"gestartet": True, "upid": upid}
 
 
-def verify_job_run(job_id: str) -> dict:
-    """Einen konfigurierten Verify-Job (ID aus verify_job_list) sofort starten. Gibt die UPID zurueck."""
+def verify_job_run(job_id: str, confirm: bool = False) -> dict:
+    """Einen konfigurierten Verify-Job (ID aus verify_job_list) sofort starten. Ohne confirm=true nur Vorschau. Gibt die UPID zurueck."""
+    _require_write()
+    if not confirm:
+        return _preview("Verify-Job", {"job_id": job_id})
     upid = api_write("POST", f"/admin/verify/{_q(job_id)}/run")
     return {"gestartet": True, "upid": upid}
 
 
-def gc_start(store: str) -> dict:
-    """Garbage Collection eines Datastores starten (Datastore.Modify). Gibt die UPID zurueck."""
+def gc_start(store: str, confirm: bool = False) -> dict:
+    """Garbage Collection eines Datastores starten (Datastore.Modify). Ohne confirm=true nur Vorschau. Gibt die UPID zurueck."""
+    _require_write()
+    if not confirm:
+        return _preview("Garbage Collection", {"store": store})
     upid = api_write("POST", f"/admin/datastore/{_q(store)}/gc")
     return {"gestartet": True, "upid": upid}
 
@@ -419,6 +449,7 @@ server = Server("pbs-mcp", version=__version__)
 _STORE = {"type": "string", "description": "Datastore-Name, z.B. mein-datastore"}
 _NS = {"type": "string", "description": "Namespace (optional), z.B. mein-namespace"}
 _UPID = {"type": "string", "description": "UPID des Tasks"}
+_CONFIRM = {"type": "boolean", "default": False, "description": "true startet den Task wirklich, sonst nur Vorschau"}
 
 
 @server.list_tools()
@@ -481,17 +512,18 @@ async def list_tools():
                  "since_hours": {"type": "integer", "description": "Nur Eintraege der letzten N Stunden"},
              }}),
         Tool(name="verify_start",
-             description="SCHREIBEND: Verify starten. Ohne Filter ganzer Datastore, sonst eingegrenzt per ns/backup_type/backup_id/backup_time (ISO-Zeit wie 2026-01-31T19:00:00Z oder Epoch). Gibt die UPID zurueck; Ergebnis mit task_status/task_log pruefen.",
+             description="SCHREIBEND: Verify starten. Ohne Filter ganzer Datastore, sonst eingegrenzt per ns/backup_type/backup_id/backup_time (ISO-Zeit wie 2026-01-31T19:00:00Z oder Epoch). Ohne confirm=true nur Vorschau. Gibt die UPID zurueck; Ergebnis mit task_status/task_log pruefen.",
              inputSchema={"type": "object", "properties": {
                  "store": _STORE, "ns": _NS,
                  "backup_type": {"type": "string"}, "backup_id": {"type": "string"},
                  "backup_time": {"type": "string"},
                  "ignore_verified": {"type": "boolean", "default": False},
+                 "confirm": _CONFIRM,
              }, "required": ["store"]}),
-        Tool(name="verify_job_run", description="SCHREIBEND: Einen konfigurierten Verify-Job (ID aus verify_job_list) sofort starten.",
-             inputSchema={"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"]}),
-        Tool(name="gc_start", description="SCHREIBEND: Garbage Collection eines Datastores starten.",
-             inputSchema={"type": "object", "properties": {"store": _STORE}, "required": ["store"]}),
+        Tool(name="verify_job_run", description="SCHREIBEND: Einen konfigurierten Verify-Job (ID aus verify_job_list) sofort starten. Ohne confirm=true nur Vorschau.",
+             inputSchema={"type": "object", "properties": {"job_id": {"type": "string"}, "confirm": _CONFIRM}, "required": ["job_id"]}),
+        Tool(name="gc_start", description="SCHREIBEND: Garbage Collection eines Datastores starten. Ohne confirm=true nur Vorschau.",
+             inputSchema={"type": "object", "properties": {"store": _STORE, "confirm": _CONFIRM}, "required": ["store"]}),
         Tool(name="snapshot_forget",
              description="SCHREIBEND, UNWIDERRUFLICH: Einen Snapshot loeschen. Nur nutzbar mit MCP_ALLOW_DELETE=true am Server. Ohne confirm=true nur Vorschau; confirm=true nur setzen, nachdem der Benutzer das Loeschen genau dieses Snapshots ausdruecklich bestaetigt hat.",
              inputSchema={"type": "object", "properties": {
@@ -514,9 +546,30 @@ async def call_tool(name, arguments):
         text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2)
         return [TextContent(type="text", text=text)]
     except httpx.HTTPStatusError as e:
-        return [TextContent(type="text", text=f"PBS API Fehler {e.response.status_code} @ {e.request.url}: {e.response.text[:500]}")]
+        # Details (URL mit Query, Rohantwort) nur ins Log, nicht an den Client
+        log.warning("PBS API Fehler %s bei %s: %s %s", e.response.status_code, name, e.request.url, e.response.text[:500])
+        return [TextContent(type="text", text=_format_http_error(name, e))]
+    except httpx.HTTPError as e:
+        # Verbindungs-/Timeout-Fehler: httpx-Meldungen enthalten die URL
+        log.warning("PBS nicht erreichbar bei %s: %s: %s", name, type(e).__name__, e)
+        return [TextContent(type="text", text=f"PBS nicht erreichbar bei {name} ({type(e).__name__})")]
     except Exception as e:
         return [TextContent(type="text", text=f"Fehler: {str(e)}")]
+
+
+_HTTP_HINTS = {
+    400: "ungueltige Parameter",
+    401: "Token ungueltig (PBS_TOKEN_ID/PBS_TOKEN_SECRET pruefen)",
+    403: "keine Berechtigung (Rechte von Token UND User pruefen)",
+    404: "nicht gefunden",
+    500: "interner Fehler des PBS",
+}
+
+
+def _format_http_error(tool: str, e: httpx.HTTPStatusError) -> str:
+    code = e.response.status_code
+    hint = _HTTP_HINTS.get(code) or (e.response.reason_phrase or "").strip() or "Fehler"
+    return f"PBS API Fehler {code} bei {tool}: {hint}. Details im Server-Log."
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +577,7 @@ async def call_tool(name, arguments):
 # ---------------------------------------------------------------------------
 
 MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
+MCP_AUTH_TOKEN_MIN_LENGTH = 32
 
 
 class _StreamableHTTPASGIApp:
@@ -535,19 +589,20 @@ class _StreamableHTTPASGIApp:
 
 
 class BearerAuthMiddleware:
-    """Prueft 'Authorization: Bearer <token>'."""
+    """Prueft 'Authorization: Bearer <token>' (zeitkonstanter Vergleich, leeres Token passt nie)."""
 
     def __init__(self, app, token: str):
         self.app = app
         self.token = token
 
     async def __call__(self, scope, receive, send):
+        import hmac
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         headers = dict(scope.get("headers", []))
         auth_header = headers.get(b"authorization", b"").decode("latin-1")
-        if auth_header != f"Bearer {self.token}":
+        if not self.token or not hmac.compare_digest(auth_header.encode("latin-1"), f"Bearer {self.token}".encode("latin-1")):
             from starlette.responses import JSONResponse
             await JSONResponse({"error": "unauthorized"}, status_code=401)(scope, receive, send)
             return
@@ -608,10 +663,12 @@ async def run_http_server():
 
 
 def main():
-    if not MCP_AUTH_TOKEN:
+    if len(MCP_AUTH_TOKEN) < MCP_AUTH_TOKEN_MIN_LENGTH:
         raise RuntimeError(
-            "MCP_AUTH_TOKEN (statisches Bearer-Token) fehlt - aus Sicherheitsgruenden kein Start ohne Token."
+            f"MCP_AUTH_TOKEN (statisches Bearer-Token) fehlt oder ist zu kurz (mind. {MCP_AUTH_TOKEN_MIN_LENGTH} Zeichen) "
+            "- aus Sicherheitsgruenden kein Start."
         )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     asyncio.run(run_http_server())
 
 

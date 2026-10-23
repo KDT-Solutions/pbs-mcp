@@ -2,7 +2,7 @@
 
 MCP-Server fuer den Proxmox Backup Server (PBS): Status und Diagnose lesend, dazu Verify/GC starten und (gesperrt, nur mit Freigabe) Snapshots loeschen. Gleicher Aufbau wie zammad-mcp: laeuft ausschliesslich als Docker-Container (Streamable HTTP) in der Cloud hinter Reverse-Proxy, ein lokaler Betrieb (stdio/uvx) ist nicht vorgesehen, Schutz per statischem Bearer-Token (`MCP_AUTH_TOKEN`), Image per GitHub Actions nach ghcr.io.
 
-Schreibende Aktionen sind gesichert: `MCP_READONLY=true` sperrt sie alle, Loeschen geht nur mit `MCP_ALLOW_DELETE=true` am Server und `confirm=true` pro Aufruf (ohne confirm nur Vorschau). Neue Backups erzeugt der PBS nicht selbst, das loest der Proxmox VE aus.
+Schreibende Aktionen sind gesichert: `MCP_READONLY=true` sperrt sie alle, Verify/GC starten braucht `confirm=true` pro Aufruf (ohne confirm nur Vorschau), Loeschen geht nur mit `MCP_ALLOW_DELETE=true` am Server und `confirm=true` pro Aufruf (ohne confirm nur Vorschau). Neue Backups erzeugt der PBS nicht selbst, das loest der Proxmox VE aus.
 
 ## Tools
 
@@ -31,9 +31,9 @@ Schreibend:
 
 | Tool | Beschreibung |
 |------|--------------|
-| `verify_start` | Verify starten (ganzer Store oder eingegrenzt per ns/Gruppe/Snapshot) |
-| `verify_job_run` | Konfigurierten Verify-Job sofort starten |
-| `gc_start` | Garbage Collection starten |
+| `verify_start` | Verify starten (ganzer Store oder eingegrenzt per ns/Gruppe/Snapshot), Vorschau ohne `confirm` |
+| `verify_job_run` | Konfigurierten Verify-Job sofort starten, Vorschau ohne `confirm` |
+| `gc_start` | Garbage Collection starten, Vorschau ohne `confirm` |
 | `snapshot_forget` | Snapshot unwiderruflich loeschen (nur mit `MCP_ALLOW_DELETE=true`, Vorschau ohne `confirm`) |
 
 ## Umgebungsvariablen
@@ -46,9 +46,9 @@ Schreibend:
 | `PBS_VERIFY_SSL` | nein | `true` | `true`, `false` oder Pfad zu einer CA-Datei (PBS hat oft ein selbstsigniertes Zertifikat) |
 | `MCP_READONLY` | nein | `false` | `true` sperrt alle schreibenden Tools |
 | `MCP_ALLOW_DELETE` | nein | `false` | `true` erlaubt `snapshot_forget` (zusaetzlich `confirm=true` pro Aufruf) |
-| `MCP_AUTH_TOKEN` | ja | - | Statisches Bearer-Token, ohne startet der Server nicht |
+| `MCP_AUTH_TOKEN` | ja | - | Statisches Bearer-Token (mind. 32 Zeichen), ohne startet der Server nicht |
 | `MCP_HOST` / `MCP_PORT` | nein | `0.0.0.0` / `8000` | Bind im Container |
-| `MCP_BIND_ADDR` / `MCP_HOST_PORT` | nein | `0.0.0.0` / `8423` | Port-Mapping auf dem Docker-Host |
+| `MCP_BIND_ADDR` / `MCP_HOST_PORT` | nein | `127.0.0.1` / `8423` | Port-Mapping auf dem Docker-Host. Standard nur localhost; laeuft der Reverse-Proxy auf einem anderen Host, die LAN-IP des Docker-Hosts setzen |
 
 ## 1. API-Token in PBS anlegen
 
@@ -68,7 +68,18 @@ Repo nach `kdt-solutions/pbs-mcp` pushen, dann baut GitHub Actions das Image (`.
 2. Environment variables setzen: `PBS_URL`, `PBS_TOKEN_ID`, `PBS_TOKEN_SECRET`, `PBS_VERIFY_SSL`, `MCP_AUTH_TOKEN`
 3. Deploy. Updates spaeter per "Pull and redeploy".
 
-Reverse-Proxy (Plesk/nginx) mit TLS auf `<Host-IP>:8423`, Endpoint-Pfad `/mcp`. `GET /healthz` ist ohne Token erreichbar und liefert nur `{"status": "ok"}` (Docker-Healthcheck, keine Abfrage des PBS); alle anderen Pfade brauchen das Bearer-Token. In Claude als Remote-MCP mit `https://<subdomain>/mcp` und dem `MCP_AUTH_TOKEN` als Bearer-Token einbinden. Der Container muss `PBS_URL` (Port 8007) erreichen koennen.
+Reverse-Proxy (Plesk/nginx) mit TLS auf `<Host-IP>:8423`, Endpoint-Pfad `/mcp`. Der Port ist standardmaessig nur auf `127.0.0.1` des Docker-Hosts gemappt; laeuft der Proxy auf einem anderen Host, `MCP_BIND_ADDR` auf die LAN-IP setzen. `GET /healthz` ist ohne Token erreichbar und liefert nur `{"status": "ok"}` (Docker-Healthcheck, keine Abfrage des PBS); alle anderen Pfade brauchen das Bearer-Token. In Claude als Remote-MCP mit `https://<subdomain>/mcp` und dem `MCP_AUTH_TOKEN` als Bearer-Token einbinden. Der Container muss `PBS_URL` (Port 8007) erreichen koennen.
+
+Fehler der PBS-API gehen nur als Statuscode mit kurzer Meldung an den Client (z.B. `PBS API Fehler 403 bei namespace_list: keine Berechtigung ...`); URL, Query und Rohantwort stehen im Container-Log. Der Container laeuft als unprivilegierter User mit nur lesbarem Root-Dateisystem und ohne Capabilities (`docker-compose.yml`).
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+Die Tests pruefen Bearer-Auth und `/healthz`, die Schutzschalter der schreibenden Tools (`confirm`/Vorschau, `MCP_READONLY`), die Fehlermeldungen (keine URL/Rohantwort an den Client) und die Token-Laenge, alles gegen simulierte PBS-Antworten.
 
 ## Getestet
 

@@ -18,6 +18,10 @@ ARG APP_VERSION=
 ENV GIT_SHA=$GIT_SHA \
     APP_VERSION=$APP_VERSION
 
+# Nicht als root laufen
+RUN useradd --system --uid 10001 --no-create-home app
+USER app
+
 EXPOSE 8000
 
 # /healthz ist ohne Auth erreichbar und prueft nur, ob der Prozess antwortet

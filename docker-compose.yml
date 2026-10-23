@@ -8,6 +8,15 @@ services:
     pull_policy: always
     container_name: pbs-mcp-cloud
     restart: unless-stopped
+    # Haertung: unprivilegierter User (Dockerfile), Root-Dateisystem nur lesbar,
+    # keine Linux-Capabilities, keine Rechteausweitung. Der Server schreibt nichts auf Platte.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     environment:
       - PBS_URL=${PBS_URL}
       - PBS_TOKEN_ID=${PBS_TOKEN_ID}
@@ -19,7 +28,8 @@ services:
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000
     ports:
-      # Auf allen Interfaces gebunden (Standard wie bei allen MCP-Stacks), damit
-      # NPM den Dienst ueber <Host-IP>:8423 erreicht. Die Zugriffskontrolle ist das
-      # Bearer-Token, TLS macht der Reverse-Proxy. Ueber MCP_BIND_ADDR einschraenkbar.
-      - "${MCP_BIND_ADDR:-0.0.0.0}:${MCP_HOST_PORT:-8423}:8000"
+      # Standardmaessig nur auf 127.0.0.1 des Docker-Hosts gemappt. Laeuft der
+      # Reverse-Proxy (NPM) auf einem anderen Host, MCP_BIND_ADDR auf die LAN-IP
+      # setzen, ueber die NPM den Dienst erreicht. Die Zugriffskontrolle ist das
+      # Bearer-Token, TLS macht der Reverse-Proxy.
+      - "${MCP_BIND_ADDR:-127.0.0.1}:${MCP_HOST_PORT:-8423}:8000"
